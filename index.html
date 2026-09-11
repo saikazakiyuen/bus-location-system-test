@@ -7,36 +7,80 @@
   <style>
     body, html { margin: 0; padding: 0; height: 100%; }
     #map { width: 100%; height: 100%; }
+    
+    /* ★変更点1: top を bottom に変更し、左下に配置 */
     #ui-panel {
-      position: absolute; top: 10px; left: 10px; z-index: 99;
+      position: absolute; bottom: 40px; left: 10px; z-index: 99;
       background: rgba(255, 255, 255, 0.9); padding: 15px; border: 2px solid black;
       border-radius: 5px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
     }
+    
+    #time-display { font-size: 18px; font-weight: bold; }
+    
+    /* ★変更点2: タップして開閉するためのスタイル */
+    #settings-header {
+      cursor: pointer;
+      font-weight: bold;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid #ccc;
+    }
+    #settings-content {
+      display: none; /* 初期状態は非表示（隠す）に設定 */
+      margin-top: 10px;
+    }
+    
     .route-toggle { font-size: 16px; margin-top: 10px; display: block; cursor: pointer; }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 </head>
 <body>
   <div id="ui-panel">
-    <div id="time-display" style="font-size: 18px; font-weight: bold; margin-bottom: 10px;">時刻: --:--:--</div>
-    <hr>
-    <strong>表示設定</strong>
-    <!-- ★NEW: 系統2のチェックボックスを追加 -->
-    <label class="route-toggle"><input type="checkbox" id="chk-route-1" checked> 系統1 (鹿屋〜根占)</label>
-    <label class="route-toggle"><input type="checkbox" id="chk-route-2" checked> 系統2 (鹿屋〜垂水)</label>
+    <div id="time-display">時刻: --:--:--</div>
+    
+    <!-- ★変更点3: 開閉用のタイトル部分 -->
+    <div id="settings-header" onclick="toggleSettings()">
+      <span>⚙️ 表示設定</span>
+      <span id="toggle-icon">▼</span>
+    </div>
+    
+    <!-- ★変更点4: 開閉される中身（チェックボックス） -->
+    <div id="settings-content">
+      <label class="route-toggle"><input type="checkbox" id="chk-route-1" checked> 系統1 (鹿屋〜根占)</label>
+      <label class="route-toggle"><input type="checkbox" id="chk-route-2" checked> 系統2 (鹿屋〜垂水)</label>
+    </div>
   </div>
+  
   <div id="map"></div>
 
   <script>
-    // ★NEW: 読み込む系統番号に "2" を追加
     const routesToLoad = ["1", "2"]; 
     const systemData = {}; 
     let map;
 
+    // ★NEW: 設定パネルを開閉する関数
+    function toggleSettings() {
+      const content = document.getElementById("settings-content");
+      const icon = document.getElementById("toggle-icon");
+      if (content.style.display === "block") {
+        content.style.display = "none";
+        icon.innerText = "▼";
+      } else {
+        content.style.display = "block";
+        icon.innerText = "▲";
+      }
+    }
+
     async function initMap() {
       map = new google.maps.Map(document.getElementById("map"), {
-        center: { lat: 31.3950, lng: 130.7900 }, // 中心を少し北西（体育大付近）に調整
+        center: { lat: 31.3950, lng: 130.7900 },
         zoom: 11,
+        disableDefaultUI: true, // オプション: マップ標準の邪魔なボタンを消す場合は有効化
+        zoomControl: true       // ズームボタンだけは残す
       });
 
       for (const routeId of routesToLoad) {
@@ -49,10 +93,9 @@
     async function loadRouteData(routeId) {
       systemData[routeId] = { stops: {}, pathSegments: [], trips: [], polyline: null };
 
-      // 1. 経路データの読み込み
       const resRoute = await fetch(`route_${routeId}.csv`);
       const routeText = await resRoute.text();
-      const routeRows = Papa.parse(routeText, { header: true, skipEmptyLines: true }).data;
+      const routeRows = Papa.parse(routeText, { header: true, skipEmptyLines: true, transform: function(v){return v.trim();} }).data;
 
       let currentSegment = [];
       const allPathCoords = [];
@@ -73,16 +116,14 @@
         }
       });
 
-      // 路線ごとの色を分ける（系統1は赤、系統2は青）
       const routeColor = routeId === "1" ? "#FF0000" : "#00AAFF";
       systemData[routeId].polyline = new google.maps.Polyline({
         path: allPathCoords, geodesic: true, strokeColor: routeColor, strokeOpacity: 0.5, strokeWeight: 4, map: map
       });
 
-      // 2. 時刻表データの読み込み
       const resTime = await fetch(`timetable_${routeId}.csv`);
       const timeText = await resTime.text();
-      const timeRows = Papa.parse(timeText, { header: true, skipEmptyLines: true }).data;
+      const timeRows = Papa.parse(timeText, { header: true, skipEmptyLines: true, transform: function(v){return v.trim();} }).data;
 
       const schedulesByTrip = {};
       timeRows.forEach(row => {
@@ -90,7 +131,6 @@
         schedulesByTrip[row.trip_id].push({ stop_id: row.stop_id, time: row.time });
       });
 
-      // 3. 各便のマーカーと情報ウィンドウ（タップ表示）の作成
       for (const tripId in schedulesByTrip) {
         const marker = new google.maps.Marker({
           map: map,
@@ -98,7 +138,6 @@
           visible: false
         });
 
-        // ★NEW: マーカーをタップした時に表示する吹き出し（InfoWindow）
         const infoWindow = new google.maps.InfoWindow({
           content: `<div style="padding: 5px; font-size: 16px; font-weight: bold; text-align: center;">便名: ${tripId}</div>`
         });
@@ -186,6 +225,6 @@
     }
   </script>
   
-  <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBqcUNb7-_olnNZKHR_UyfqB5Zi2KOI5X8&libraries=geometry&callback=initMap"></script>
+  <script async defer src="https://maps.googleapis.com/maps/api/js?key=YOUR_API_KEY&libraries=geometry&callback=initMap"></script>
 </body>
 </html>
