@@ -1,0 +1,7 @@
+trip_id,stop_id,time
+bus1,kanoya,16:40:00
+bus1,kinko,16:50:00
+bus1,nejime,17:00:00
+bus2,kanoya,17:10:00
+bus2,kinko,17:20:00
+bus2,nejime,17:30:00
