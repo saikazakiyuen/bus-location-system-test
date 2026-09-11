@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>簡易バスロケーションシステム</title>
+  <style>
+    /* 画面いっぱいに地図を表示するための設定 */
+    body, html { margin: 0; padding: 0; height: 100%; }
+    #map { width: 100%; height: 100%; }
+    #time-display {
+      position: absolute; top: 10px; left: 10px; z-index: 99;
+      background: white; padding: 10px; font-size: 18px; border: 2px solid black;
+    }
+  </style>
+</head>
+<body>
+  <!-- 現在時刻を表示する小窓 -->
+  <div id="time-display">時刻: --:--:--</div>
+  <!-- 地図を表示する場所 -->
+  <div id="map"></div>
+
+  <script>
+    // 【設定1】停留所の座標データ（例としてJR六甲道付近と神戸大学付近）
+    const stops = {
+      "A": { lat: 34.7145, lng: 135.2396 }, 
+      "B": { lat: 34.7265, lng: 135.2346 }
+    };
+
+    // 【設定2】時刻表データ（★テストする際は、ここの時間を「今の時間から数分後」に書き換えてください）
+    const schedule = [
+      { stop_id: "A", time: "16:42:00" }, // 出発時刻
+      { stop_id: "B", time: "16:47:00" }  // 到着時刻
+    ];
+
+    let map;
+    let busMarker;
+
+    // 地図を初期化する関数
+    function initMap() {
+      const startPos = stops[schedule[0].stop_id];
+
+      // 地図の作成
+      map = new google.maps.Map(document.getElementById("map"), {
+        center: startPos,
+        zoom: 15,
+      });
+
+      // 停留所にピンを立てる
+      new google.maps.Marker({ position: stops["A"], map: map, label: "A" });
+      new google.maps.Marker({ position: stops["B"], map: map, label: "B" });
+
+      // 路線を線（Polyline）で引く
+      const routePath = new google.maps.Polyline({
+        path: [stops["A"], stops["B"]],
+        geodesic: true,
+        strokeColor: "#FF0000",
+        strokeOpacity: 0.5,
+        strokeWeight: 4,
+      });
+      routePath.setMap(map);
+
+      // バスのマーカー（動くアイコン）を作成
+      busMarker = new google.maps.Marker({
+        position: startPos,
+        map: map,
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 8,
+          fillColor: "#0000FF", // 青色
+          fillOpacity: 1,
+          strokeWeight: 2
+        },
+        title: "走行中のバス"
+      });
+
+      // 1秒ごとにバスの位置を更新するループ処理を開始
+      setInterval(updateBusPosition, 1000);
+    }
+
+    // 時刻を秒数に変換する補助機能（例 "16:40:00" -> 60000）
+    function timeToSeconds(timeStr) {
+      const parts = timeStr.split(":");
+      return parseInt(parts[0]) * 3600 + parseInt(parts[1]) * 60 + parseInt(parts[2]);
+    }
+
+    // バスの位置を計算して動かす関数
+    function updateBusPosition() {
+      const now = new Date();
+      document.getElementById("time-display").innerText = "時刻: " + now.toLocaleTimeString();
+
+      const currentSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+      
+      const timeA = timeToSeconds(schedule[0].time);
+      const timeB = timeToSeconds(schedule[1].time);
+
+      // まだ出発時間前の場合
+      if (currentSeconds < timeA) {
+        busMarker.setPosition(stops[schedule[0].stop_id]);
+        return;
+      }
+      // すでに到着時間を過ぎている場合
+      if (currentSeconds > timeB) {
+        busMarker.setPosition(stops[schedule[1].stop_id]);
+        return;
+      }
+
+      // 走行中の場合：経過時間から内分比（割合）を計算する
+      const totalDuration = timeB - timeA;
+      const elapsed = currentSeconds - timeA;
+      const fraction = elapsed / totalDuration;
+
+      // Google Maps APIの機能を使って、2点間の座標を正確に内分計算する
+      const posA = new google.maps.LatLng(stops["A"].lat, stops["A"].lng);
+      const posB = new google.maps.LatLng(stops["B"].lat, stops["B"].lng);
+      const currentPos = google.maps.geometry.spherical.interpolate(posA, posB, fraction);
+
+      // バスの位置を更新
+      busMarker.setPosition(currentPos);
+    }
+  </script>
+  
+  <!-- ★YOUR_API_KEY の部分を、ステップ2で取得した自分のAPIキーに書き換えてください -->
+  <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBqcUNb7-_olnNZKHR_UyfqB5Zi2KOI5X8&libraries=geometry&callback=initMap"></script>
+</body>
+</html>
