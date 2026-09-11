@@ -3,90 +3,112 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>大隅半島バスロケーションシステム（アイコン・表示制限対応版）</title>
+  <title>大隅半島バスロケーションシステム</title>
   <style>
     body, html { margin: 0; padding: 0; height: 100%; }
     #map { width: 100%; height: 100%; }
-    #time-display {
+    #ui-panel {
       position: absolute; top: 10px; left: 10px; z-index: 99;
-      background: white; padding: 10px; font-size: 18px; border: 2px solid black;
+      background: rgba(255, 255, 255, 0.9); padding: 15px; border: 2px solid black;
+      border-radius: 5px;
     }
+    .route-toggle { font-size: 16px; margin-top: 10px; display: block; cursor: pointer; }
   </style>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 </head>
 <body>
-  <div id="time-display">時刻: --:--:--</div>
+  <div id="ui-panel">
+    <div id="time-display" style="font-size: 18px; font-weight: bold; margin-bottom: 10px;">時刻: --:--:--</div>
+    <hr>
+    <strong>表示設定</strong>
+    <!-- ★NEW: 系統2のチェックボックスを追加 -->
+    <label class="route-toggle"><input type="checkbox" id="chk-route-1" checked> 系統1 (鹿屋〜根占)</label>
+    <label class="route-toggle"><input type="checkbox" id="chk-route-2" checked> 系統2 (鹿屋〜垂水)</label>
+  </div>
   <div id="map"></div>
 
   <script>
-    // 【設定1】停留所の座標データ
-    const stops = {
-      "kanoya": { lat: 31.3783, lng: 130.8524 }, 
-      "kinko":  { lat: 31.2381, lng: 130.7744 },
-      "nejime": { lat: 31.2185, lng: 130.7641 }
-    };
-
-    // 【設定2】時刻表データ
-    const schedule = [
-      { stop_id: "kanoya", time: "17:20:00" },
-      { stop_id: "kinko",  time: "17:25:00" },
-      { stop_id: "nejime", time: "17:28:00" }
-    ];
-
-    // 【設定3】区間ごとの詳細なルート（通過点）のデータ
-    const pathSegments = [
-      [
-        stops["kanoya"],
-        { lat: 31.3450, lng: 130.8250 },
-        { lat: 31.2850, lng: 130.7950 },
-        stops["kinko"]
-      ],
-      [
-        stops["kinko"],
-        { lat: 31.2280, lng: 130.7680 },
-        stops["nejime"]
-      ]
-    ];
-
+    // ★NEW: 読み込む系統番号に "2" を追加
+    const routesToLoad = ["1", "2"]; 
+    const systemData = {}; 
     let map;
-    let busMarker;
 
-    function initMap() {
+    async function initMap() {
       map = new google.maps.Map(document.getElementById("map"), {
-        center: stops[schedule[0].stop_id],
+        center: { lat: 31.3950, lng: 130.7900 }, // 中心を少し北西（体育大付近）に調整
         zoom: 11,
       });
 
-      for (let i = 0; i < schedule.length; i++) {
-        new google.maps.Marker({ position: stops[schedule[i].stop_id], map: map, label: String(i + 1) });
+      for (const routeId of routesToLoad) {
+        await loadRouteData(routeId);
       }
 
+      setInterval(updateSystem, 1000);
+    }
+
+    async function loadRouteData(routeId) {
+      systemData[routeId] = { stops: {}, pathSegments: [], trips: [], polyline: null };
+
+      // 1. 経路データの読み込み
+      const resRoute = await fetch(`route_${routeId}.csv`);
+      const routeText = await resRoute.text();
+      const routeRows = Papa.parse(routeText, { header: true, skipEmptyLines: true }).data;
+
+      let currentSegment = [];
       const allPathCoords = [];
-      pathSegments.forEach(segment => {
-        segment.forEach(point => allPathCoords.push(point));
+
+      routeRows.forEach(row => {
+        const pos = { lat: parseFloat(row.lat), lng: parseFloat(row.lng) };
+        currentSegment.push(pos);
+        allPathCoords.push(pos);
+
+        if (row.type === 'stop') {
+          systemData[routeId].stops[row.id] = pos;
+          new google.maps.Marker({ position: pos, map: map, label: "停", title: row.id });
+          
+          if (currentSegment.length > 1) {
+            systemData[routeId].pathSegments.push([...currentSegment]);
+            currentSegment = [pos];
+          }
+        }
       });
 
-      const routePath = new google.maps.Polyline({
-        path: allPathCoords,
-        geodesic: true,
-        strokeColor: "#FF0000",
-        strokeOpacity: 0.5,
-        strokeWeight: 4,
-      });
-      routePath.setMap(map);
-
-      // ★変更点：バスのマーカーをオリジナルの画像に設定
-      busMarker = new google.maps.Marker({
-        position: stops[schedule[0].stop_id],
-        map: map,
-        icon: {
-          url: "bus.png", // ★アップロードした画像ファイル名に合わせてください
-          scaledSize: new google.maps.Size(64, 64), // 64px * 64px で表示
-          anchor: new google.maps.Point(32, 32)     // 画像の中心（32, 32）が地図の座標に合うように調整
-        },
-        visible: false // 初期状態は非表示（時間の判定後に表示させるため）
+      // 路線ごとの色を分ける（系統1は赤、系統2は青）
+      const routeColor = routeId === "1" ? "#FF0000" : "#00AAFF";
+      systemData[routeId].polyline = new google.maps.Polyline({
+        path: allPathCoords, geodesic: true, strokeColor: routeColor, strokeOpacity: 0.5, strokeWeight: 4, map: map
       });
 
-      setInterval(updateBusPosition, 1000);
+      // 2. 時刻表データの読み込み
+      const resTime = await fetch(`timetable_${routeId}.csv`);
+      const timeText = await resTime.text();
+      const timeRows = Papa.parse(timeText, { header: true, skipEmptyLines: true }).data;
+
+      const schedulesByTrip = {};
+      timeRows.forEach(row => {
+        if (!schedulesByTrip[row.trip_id]) schedulesByTrip[row.trip_id] = [];
+        schedulesByTrip[row.trip_id].push({ stop_id: row.stop_id, time: row.time });
+      });
+
+      // 3. 各便のマーカーと情報ウィンドウ（タップ表示）の作成
+      for (const tripId in schedulesByTrip) {
+        const marker = new google.maps.Marker({
+          map: map,
+          icon: { url: "bus.png", scaledSize: new google.maps.Size(64, 64), anchor: new google.maps.Point(32, 32) },
+          visible: false
+        });
+
+        // ★NEW: マーカーをタップした時に表示する吹き出し（InfoWindow）
+        const infoWindow = new google.maps.InfoWindow({
+          content: `<div style="padding: 5px; font-size: 16px; font-weight: bold; text-align: center;">便名: ${tripId}</div>`
+        });
+
+        marker.addListener("click", () => {
+          infoWindow.open(map, marker);
+        });
+
+        systemData[routeId].trips.push({ tripId: tripId, schedule: schedulesByTrip[tripId], marker: marker });
+      }
     }
 
     function timeToSeconds(timeStr) {
@@ -95,72 +117,71 @@
     }
 
     function getPointAlongPath(path, fraction) {
-      let totalDistance = 0;
-      const distances = [];
-      
+      let total = 0, dists = [];
       for (let i = 0; i < path.length - 1; i++) {
         const d = google.maps.geometry.spherical.computeDistanceBetween(path[i], path[i+1]);
-        distances.push(d);
-        totalDistance += d;
+        dists.push(d); total += d;
       }
-
-      const targetDistance = totalDistance * fraction;
-      let currentDistance = 0;
-
+      const target = total * fraction;
+      let curr = 0;
       for (let i = 0; i < path.length - 1; i++) {
-        if (currentDistance + distances[i] >= targetDistance) {
-          const segmentFraction = (targetDistance - currentDistance) / distances[i];
-          return google.maps.geometry.spherical.interpolate(path[i], path[i+1], segmentFraction);
+        if (curr + dists[i] >= target) {
+          return google.maps.geometry.spherical.interpolate(path[i], path[i+1], (target - curr) / dists[i]);
         }
-        currentDistance += distances[i];
+        curr += dists[i];
       }
       return path[path.length - 1];
     }
 
-    function updateBusPosition() {
+    function updateSystem() {
       const now = new Date();
       document.getElementById("time-display").innerText = "時刻: " + now.toLocaleTimeString();
       const currentSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
 
-      const firstTime = timeToSeconds(schedule[0].time);
-      const lastTime = timeToSeconds(schedule[schedule.length - 1].time);
+      for (const routeId of routesToLoad) {
+        const isVisible = document.getElementById(`chk-route-${routeId}`).checked;
+        const data = systemData[routeId];
+        
+        data.polyline.setVisible(isVisible);
 
-      // ★NEW：表示期間の境界値（始発の5分前＝300秒前、終着の3分後＝180秒後）
-      const showStartTime = firstTime - 300;
-      const hideEndTime = lastTime + 180;
+        data.trips.forEach(trip => {
+          if (!isVisible) {
+            trip.marker.setVisible(false);
+            return;
+          }
 
-      // ★NEW：指定された期間「外」ならバスを隠して処理を終わる
-      if (currentSeconds < showStartTime || currentSeconds > hideEndTime) {
-        busMarker.setVisible(false);
-        return;
-      }
+          const sch = trip.schedule;
+          const firstTime = timeToSeconds(sch[0].time);
+          const lastTime = timeToSeconds(sch[sch.length - 1].time);
 
-      // ★NEW：指定された期間「内」ならバスを表示する
-      busMarker.setVisible(true);
+          if (currentSeconds < firstTime - 300 || currentSeconds > lastTime + 180) {
+            trip.marker.setVisible(false);
+            return;
+          }
 
-      // 出発前の待機時間（5分前から始発まで）は始発停留所に固定
-      if (currentSeconds < firstTime) {
-        busMarker.setPosition(stops[schedule[0].stop_id]);
-        return;
-      }
-      // 到着後の待機時間（到着から3分後まで）は終着停留所に固定
-      if (currentSeconds > lastTime) {
-        busMarker.setPosition(stops[schedule[schedule.length - 1].stop_id]);
-        return;
-      }
+          trip.marker.setVisible(true);
 
-      for (let i = 0; i < schedule.length - 1; i++) {
-        const timeA = timeToSeconds(schedule[i].time);
-        const timeB = timeToSeconds(schedule[i+1].time);
+          if (currentSeconds <= firstTime) {
+            trip.marker.setPosition(data.stops[sch[0].stop_id]);
+            return;
+          }
+          if (currentSeconds >= lastTime) {
+            trip.marker.setPosition(data.stops[sch[sch.length - 1].stop_id]);
+            return;
+          }
 
-        if (currentSeconds >= timeA && currentSeconds <= timeB) {
-          const fraction = (currentSeconds - timeA) / (timeB - timeA);
-          const segmentPath = pathSegments[i].map(p => new google.maps.LatLng(p.lat, p.lng));
-          
-          const currentPos = getPointAlongPath(segmentPath, fraction);
-          busMarker.setPosition(currentPos);
-          break;
-        }
+          for (let i = 0; i < sch.length - 1; i++) {
+            const timeA = timeToSeconds(sch[i].time);
+            const timeB = timeToSeconds(sch[i+1].time);
+
+            if (currentSeconds >= timeA && currentSeconds <= timeB) {
+              const fraction = (currentSeconds - timeA) / (timeB - timeA);
+              const segmentPath = data.pathSegments[i].map(p => new google.maps.LatLng(p.lat, p.lng));
+              trip.marker.setPosition(getPointAlongPath(segmentPath, fraction));
+              break;
+            }
+          }
+        });
       }
     }
   </script>
